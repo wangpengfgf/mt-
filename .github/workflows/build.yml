@@ -45,15 +45,7 @@ jobs:
             echo "::error::仓库 Secret KEYSTORE_BASE64 未配置，请先添加签名相关的 4 个 Secret。"
             exit 1
           fi
-          printf '%s' "$KEYSTORE_BASE64" | base64 --ignore-garbage -d > "$RUNNER_TEMP/release.jks"
-          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$STORE_PASSWORD" >/dev/null 2>&1; then
-            echo "::error::keystore 无法打开：KEYSTORE_BASE64 需为 .jks/.keystore 文件的 Base64（用 base64 -w0 release.jks 生成），且 STORE_PASSWORD 必须正确。"
-            exit 1
-          fi
-          if ! keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null 2>&1; then
-            echo "::error::keystore 中不存在别名 $KEY_ALIAS，请检查 Secret KEY_ALIAS。"
-            exit 1
-          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           {
             echo "storeFile=$RUNNER_TEMP/release.jks"
             echo "storePassword=$STORE_PASSWORD"
