@@ -14,6 +14,9 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +36,17 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Read app version
+        id: version
+        run: |
+          VERSION=$(sed -nE 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' pubspec.yaml | head -n1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::无法从 pubspec.yaml 解析出版本号"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "应用版本：$VERSION"
 
       - name: Restore release keystore
         env:
@@ -64,17 +78,30 @@ jobs:
       - name: Build release APK (arm64)
         run: flutter build apk --release --target-platform android-arm64 --dart-define=MTFORUM_UPDATE_URL=https://loveqin.fun/Mt/update.json
 
+      - name: Package APK
+        run: |
+          APK=$(find build/app/outputs/flutter-apk -maxdepth 1 -name '*.apk' | head -n1)
+          if [ -z "$APK" ]; then
+            echo "::error::未找到构建产物 APK"
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$APK" "dist/MTForum-${{ steps.version.outputs.version }}-arm64.apk"
+          ls -l dist
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: mtforum-release-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/app/outputs/flutter-apk/*.apk
+          tag_name: v${{ steps.version.outputs.version }}
+          name: MTForum v${{ steps.version.outputs.version }}
+          files: dist/*.apk
           generate_release_notes: true
+          make_latest: true
