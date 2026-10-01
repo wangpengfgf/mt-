@@ -34,6 +34,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::仓库 Secret KEYSTORE_BASE64 未配置，请先添加签名相关的 4 个 Secret。"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > key.properties
+
       - name: Build release APK (arm64)
         run: flutter build apk --release --target-platform android-arm64 --dart-define=MTFORUM_UPDATE_URL=https://loveqin.fun/Mt/update.json
 
