@@ -486,7 +486,11 @@ class _ThreadDetailPageState extends State<ThreadDetailPage> {
       );
       return;
     }
-    // 未开启时自动开启评论过滤与包含匹配，保证屏蔽词立即生效。
+    // 添加的属于关键词规则：当前若是正则方式，先切回来，保证屏蔽词立即生效。
+    final switchedFromRegex = filter.regexModeEnabled;
+    if (switchedFromRegex) {
+      await filter.setMode(CommentFilterMode.keyword);
+    }
     if (!filter.commentsEnabled) {
       await filter.setCommentsEnabled(true);
     }
@@ -495,7 +499,13 @@ class _ThreadDetailPageState extends State<ThreadDetailPage> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加屏蔽词「$keyword」，含该词的评论将被隐藏')),
+      SnackBar(
+        content: Text(
+          switchedFromRegex
+              ? '已添加屏蔽词「$keyword」，过滤方式已切回关键词'
+              : '已添加屏蔽词「$keyword」，含该词的评论将被隐藏',
+        ),
+      ),
     );
   }
 

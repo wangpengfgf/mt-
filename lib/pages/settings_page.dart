@@ -109,6 +109,62 @@ class _SettingsPageState extends State<SettingsPage> {
     controller.dispose();
   }
 
+  /// 编辑正则过滤规则，保存前先校验，避免无效正则静默失效。
+  Future<void> _editFilterRegexes() async {
+    final controller = TextEditingController(
+      text: _commentFilter.regexPatterns.join('\n'),
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('评论过滤正则'),
+        content: SizedBox(
+          width: 420,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            minLines: 5,
+            maxLines: 10,
+            decoration: const InputDecoration(
+              hintText: '每行一条正则表达式',
+              helperText: '命中任意一条即隐藏；忽略大小写，^ 与 \$ 按行匹配',
+              alignLabelWithHint: true,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true) {
+      controller.dispose();
+      return;
+    }
+
+    final text = controller.text;
+    controller.dispose();
+    if (!mounted) return;
+
+    final invalid = CommentFilterService.findInvalidRegex(
+      CommentFilterService.parseRegexPatterns(text),
+    );
+    if (invalid != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('正则表达式无效：$invalid')),
+      );
+      return;
+    }
+    await _commentFilter.setRegexPatternsFromText(text);
+  }
+
   Future<void> _editMaxMatchedContentLength() async {
     final controller = TextEditingController(
       text: '${_commentFilter.maxMatchedContentLength}',
@@ -466,61 +522,111 @@ class _SettingsPageState extends State<SettingsPage> {
                 _Group(
                   children: [
                     ListTile(
-                      leading: const Icon(Icons.filter_alt_outlined),
-                      title: const Text('过滤关键词'),
+                      leading: const Icon(Icons.rule_rounded),
+                      title: const Text('过滤方式'),
                       subtitle: Text(
-                        _commentFilter.hasKeywords
-                            ? '已设置 ${_commentFilter.keywords.length} 个关键词 · '
-                                '${_commentFilter.fuzzyMatchingEnabled ? '模糊过滤' : '精确过滤'}'
-                            : '尚未设置关键词',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: _editFilterKeywords,
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.manage_search_rounded),
-                      title: const Text('关键词匹配方式'),
-                      subtitle: Text(
-                        _commentFilter.fuzzyMatchingEnabled
-                            ? '模糊匹配：内容中包含任一关键词即过滤'
-                            : '精确匹配：整条内容与关键词一致才过滤',
+                        _commentFilter.regexModeEnabled
+                            ? '正则表达式：按正则匹配整条内容'
+                            : '关键词：按关键词匹配整条内容',
                       ),
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
                       child: SizedBox(
                         width: double.infinity,
-                        child: SegmentedButton<bool>(
+                        child: SegmentedButton<CommentFilterMode>(
                           segments: const [
-                            ButtonSegment<bool>(
-                              value: false,
-                              icon: Icon(Icons.filter_alt_outlined),
-                              label: Text('精确匹配'),
+                            ButtonSegment<CommentFilterMode>(
+                              value: CommentFilterMode.keyword,
+                              icon: Icon(Icons.text_fields_rounded),
+                              label: Text('关键词'),
                             ),
-                            ButtonSegment<bool>(
-                              value: true,
-                              icon: Icon(Icons.saved_search_rounded),
-                              label: Text('模糊匹配'),
+                            ButtonSegment<CommentFilterMode>(
+                              value: CommentFilterMode.regex,
+                              icon: Icon(Icons.code_rounded),
+                              label: Text('正则表达式'),
                             ),
                           ],
-                          selected: {_commentFilter.fuzzyMatchingEnabled},
+                          selected: {_commentFilter.mode},
                           showSelectedIcon: false,
                           onSelectionChanged: (selection) {
-                            _commentFilter.setFuzzyMatchingEnabled(
-                              selection.first,
-                            );
+                            _commentFilter.setMode(selection.first);
                           },
                         ),
                       ),
                     ),
                     const Divider(height: 1),
+                    // 两种方式互斥，只展示当前生效的那一套规则。
+                    if (_commentFilter.regexModeEnabled) ...[
+                      ListTile(
+                        leading: const Icon(Icons.filter_alt_outlined),
+                        title: const Text('过滤正则'),
+                        subtitle: Text(
+                          _commentFilter.hasRegexPatterns
+                              ? '已设置 ${_commentFilter.regexPatterns.length} 条规则'
+                              : '尚未设置正则表达式',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: _editFilterRegexes,
+                      ),
+                    ] else ...[
+                      ListTile(
+                        leading: const Icon(Icons.filter_alt_outlined),
+                        title: const Text('过滤关键词'),
+                        subtitle: Text(
+                          _commentFilter.hasKeywords
+                              ? '已设置 ${_commentFilter.keywords.length} 个关键词 · '
+                                  '${_commentFilter.fuzzyMatchingEnabled ? '模糊过滤' : '精确过滤'}'
+                              : '尚未设置关键词',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: _editFilterKeywords,
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.manage_search_rounded),
+                        title: const Text('关键词匹配方式'),
+                        subtitle: Text(
+                          _commentFilter.fuzzyMatchingEnabled
+                              ? '模糊匹配：内容中包含任一关键词即过滤'
+                              : '精确匹配：整条内容与关键词一致才过滤',
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment<bool>(
+                                value: false,
+                                icon: Icon(Icons.filter_alt_outlined),
+                                label: Text('精确匹配'),
+                              ),
+                              ButtonSegment<bool>(
+                                value: true,
+                                icon: Icon(Icons.saved_search_rounded),
+                                label: Text('模糊匹配'),
+                              ),
+                            ],
+                            selected: {_commentFilter.fuzzyMatchingEnabled},
+                            showSelectedIcon: false,
+                            onSelectionChanged: (selection) {
+                              _commentFilter.setFuzzyMatchingEnabled(
+                                selection.first,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                    const Divider(height: 1),
                     SwitchListTile(
                       secondary: const Icon(Icons.shield_outlined),
-                      title: const Text('关键词过滤最大长度'),
+                      title: const Text('过滤内容最大长度'),
                       subtitle: Text(
                         '超过 ${_commentFilter.maxMatchedContentLength} 字的内容'
-                        '即使命中关键词也不会隐藏',
+                        '即使命中规则也不会隐藏',
                       ),
                       value: _commentFilter.matchLengthLimitEnabled,
                       onChanged: _commentFilter.setMatchLengthLimitEnabled,
@@ -545,7 +651,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     SwitchListTile(
                       secondary: const Icon(Icons.forum_outlined),
                       title: const Text('评论区过滤'),
-                      subtitle: const Text('在评论区应用关键词过滤规则'),
+                      subtitle: const Text('在评论区应用当前过滤规则'),
                       value: _commentFilter.commentsEnabled,
                       onChanged: _commentFilter.setCommentsEnabled,
                     ),
