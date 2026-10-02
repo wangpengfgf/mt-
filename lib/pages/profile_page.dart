@@ -942,7 +942,7 @@ class _SignRankPageState extends State<_SignRankPage>
                       secondary: const Icon(Icons.autorenew_rounded),
                       title: const Text('自动签到'),
                       subtitle: const Text(
-                        '开启后每天第一次打开软件自动签到；失败会在下次启动重试',
+                        '开启后每天第一次打开软件，自动为多账号管理中的所有账号签到；失败会在下次启动重试',
                       ),
                       value: _autoSign,
                       onChanged: _setAutoSign,

@@ -205,17 +205,23 @@ class ApiService {
   /// 多账号切换：用给定会话（auth/saltkey）整体替换当前登录态。
   ///
   /// 清空内存 Cookie → 覆写持久层 → 重新注入会话 Cookie → 清缓存 formhash。
+  ///
+  /// 批量切号（如多账号自动签到）可传 `notify: false` 抑制登录状态回调，
+  /// 避免每个账号都触发一次界面刷新与消息角标重拉。
   Future<void> applySession({
     required String auth,
     required String saltkey,
     String? uid,
+    bool notify = true,
   }) async {
     await _cookieJar.deleteAll();
     _currentUid = (uid != null && uid.isNotEmpty) ? uid : null;
     await _persistSession(auth, saltkey);
     await _restoreSessionCookies();
     await _clearCachedFormhash();
-    _notifyLoginChanged();
+    if (notify) {
+      _notifyLoginChanged();
+    }
     unawaited(_primeFormhashAfterLogin());
   }
 
