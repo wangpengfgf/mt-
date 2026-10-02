@@ -76,7 +76,7 @@ jobs:
           } > key.properties
 
       - name: Build release APK (arm64)
-        run: flutter build apk --release --target-platform android-arm64 --dart-define=MTFORUM_UPDATE_URL=https://loveqin.fun/Mt/update.json
+        run: flutter build apk --release --target-platform android-arm64
 
       - name: Package APK
         run: |

@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 
 import '../services/api_service.dart';
 import '../services/comment_filter_service.dart';
-import '../services/source_export_service.dart';
 import '../services/theme_service.dart';
 import '../services/update_service.dart';
 import 'account/account_switch_page.dart';
@@ -29,7 +28,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _autoCheck = true;
   bool _checking = false;
   bool _fontChanging = false;
-  bool _exportingSource = false;
   String _version = '';
 
   @override
@@ -51,56 +49,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _refresh() {
     if (mounted) setState(() {});
-  }
-
-  /// 把随包分发的源码压缩包释放到存储卡，成功后给出路径并支持复制。
-  Future<void> _exportSource() async {
-    if (_exportingSource) return;
-    setState(() => _exportingSource = true);
-    final result = await SourceExportService.export();
-    if (!mounted) return;
-    setState(() => _exportingSource = false);
-
-    final messenger = ScaffoldMessenger.of(context);
-    if (!result.success) {
-      messenger.showSnackBar(SnackBar(content: Text(result.message)));
-      return;
-    }
-
-    final sizeText = result.size >= 1024 * 1024
-        ? '${(result.size / 1024 / 1024).toStringAsFixed(2)} MB'
-        : '${(result.size / 1024).toStringAsFixed(0)} KB';
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('源码已导出'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('大小 $sizeText'),
-            const SizedBox(height: 12),
-            SelectableText(result.path),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: result.path));
-              Navigator.pop(ctx);
-              messenger.showSnackBar(
-                const SnackBar(content: Text('路径已复制')),
-              );
-            },
-            child: const Text('复制路径'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _load() async {
@@ -394,26 +342,6 @@ class _SettingsPageState extends State<SettingsPage> {
                           builder: (_) => const ErrorLogPage(),
                         ),
                       ),
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.folder_zip_outlined),
-                      title: const Text('导出软件源码'),
-                      subtitle: const Text('把随包内置的源码压缩包释放到存储卡'),
-                      trailing: _exportingSource
-                          ? const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 16),
-                              child: Center(
-                                child: SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : const Icon(Icons.chevron_right_rounded),
-                      onTap: _exportingSource ? null : _exportSource,
                     ),
                   ],
                 ),

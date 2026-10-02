@@ -60,42 +60,85 @@ List<String> normalizeUpdateChangelog(String raw) {
 
 class UpdateInfo {
   final String version;
-  final int versionCode;
   final String changelog;
   final String downloadUrl;
   final int? size;
 
   const UpdateInfo({
     required this.version,
-    required this.versionCode,
     required this.changelog,
     required this.downloadUrl,
     this.size,
   });
 
-  factory UpdateInfo.fromJson(Map<String, dynamic> json) {
+  /// 从 GitHub Release 接口响应构造。
+  ///
+  /// 版本号取 tag（去掉 v 前缀），更新说明取 body，安装包取附件里的 .apk。
+  factory UpdateInfo.fromGitHubRelease(Map<String, dynamic> json) {
+    Map<String, dynamic>? apk;
+    final assets = json['assets'];
+    if (assets is List) {
+      for (final asset in assets) {
+        if (asset is! Map) continue;
+        final name = '${asset['name'] ?? ''}'.toLowerCase();
+        if (!name.endsWith('.apk')) continue;
+        apk = asset.map((key, value) => MapEntry(key.toString(), value));
+        break;
+      }
+    }
+
     return UpdateInfo(
-      version: '${json['version'] ?? ''}'.trim(),
-      versionCode: int.tryParse('${json['versionCode'] ?? 0}') ?? 0,
-      changelog: '${json['changelog'] ?? ''}'.trim(),
-      downloadUrl: '${json['downloadUrl'] ?? ''}'.trim(),
-      size: int.tryParse('${json['size'] ?? ''}'),
+      version: _stripVersionPrefix('${json['tag_name'] ?? ''}'),
+      changelog: '${json['body'] ?? ''}'.trim(),
+      downloadUrl: '${apk?['browser_download_url'] ?? ''}'.trim(),
+      size: int.tryParse('${apk?['size'] ?? ''}'),
     );
   }
 }
 
+/// 去掉 tag 常见的 v/V 前缀。
+String _stripVersionPrefix(String tag) {
+  final trimmed = tag.trim();
+  if (trimmed.isEmpty) return '';
+  final first = trimmed[0];
+  if (first == 'v' || first == 'V') return trimmed.substring(1).trim();
+  return trimmed;
+}
+
+/// 按点分数字段比较版本号，a 比 b 新时返回正数。
+int compareVersions(String a, String b) {
+  final left = _versionSegments(a);
+  final right = _versionSegments(b);
+  final length = left.length > right.length ? left.length : right.length;
+  for (var i = 0; i < length; i++) {
+    final x = i < left.length ? left[i] : 0;
+    final y = i < right.length ? right[i] : 0;
+    if (x != y) return x.compareTo(y);
+  }
+  return 0;
+}
+
+List<int> _versionSegments(String value) {
+  return value
+      .split(RegExp(r'[^0-9]+'))
+      .where((segment) => segment.isNotEmpty)
+      .map((segment) => int.tryParse(segment) ?? 0)
+      .toList();
+}
+
 class UpdateCheckResult {
   final String currentVersion;
-  final int currentVersionCode;
   final UpdateInfo info;
 
   const UpdateCheckResult({
     required this.currentVersion,
-    required this.currentVersionCode,
     required this.info,
   });
 
-  bool get hasUpdate => info.versionCode > currentVersionCode;
+  /// Release 的版本号比本机新时提示更新。
+  ///
+  /// 版本号来自 Release tag，因此这里按版本名比较，而不是构建号。
+  bool get hasUpdate => compareVersions(info.version, currentVersion) > 0;
 }
 
 class DownloadProgress {
@@ -124,18 +167,27 @@ class UpdateService {
 
   static const _channel = MethodChannel('mtforum/update');
   static const _startupKey = 'startup_auto_check_update';
-  static const manifestUrl = String.fromEnvironment(
-    'MTFORUM_UPDATE_URL',
-    defaultValue: '',
+
+  /// 更新来源仓库（owner/repo）。
+  ///
+  /// 可在构建时用 --dart-define=MTFORUM_GITHUB_REPO=xxx/yyy 覆盖。
+  static const String repo = String.fromEnvironment(
+    'MTFORUM_GITHUB_REPO',
+    defaultValue: 'wangpengfgf/mt-',
   );
+
+  static const String _apiBase = 'https://api.github.com';
 
   final Dio _dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: const {
-        'Accept': 'application/json',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
         'Cache-Control': 'no-cache',
+        // GitHub API 强制要求 User-Agent，缺失会直接返回 403。
+        'User-Agent': 'MTForum-Android',
       },
     ),
   );
@@ -155,17 +207,17 @@ class UpdateService {
     return raw ?? const <String, dynamic>{};
   }
 
+  /// 读取 GitHub 上最新的 Release 作为更新来源。
   Future<UpdateCheckResult> check() async {
-    if (manifestUrl.isEmpty) {
-      throw StateError('更新地址未配置，请通过 MTFORUM_UPDATE_URL 构建');
+    if (repo.isEmpty) {
+      throw StateError('更新仓库未配置，请通过 MTFORUM_GITHUB_REPO 构建');
     }
 
     final version = await getCurrentVersionInfo();
     final currentName = '${version['versionName'] ?? ''}';
-    final currentCode = int.tryParse('${version['versionCode'] ?? 0}') ?? 0;
 
     final response = await _dio.get<dynamic>(
-      manifestUrl,
+      '$_apiBase/repos/$repo/releases/latest',
       queryParameters: {'_': DateTime.now().millisecondsSinceEpoch},
       options: Options(responseType: ResponseType.plain),
     );
@@ -173,39 +225,26 @@ class UpdateService {
     dynamic decoded = response.data;
     if (decoded is String) decoded = jsonDecode(decoded);
     if (decoded is! Map) {
-      throw const FormatException('update.json 格式错误');
+      throw const FormatException('GitHub Release 响应格式错误');
     }
 
-    var info = UpdateInfo.fromJson(
+    final info = UpdateInfo.fromGitHubRelease(
       decoded.map((key, value) => MapEntry(key.toString(), value)),
     );
-    final rawDownloadUri = Uri.tryParse(info.downloadUrl);
-    if (rawDownloadUri != null && !rawDownloadUri.hasScheme) {
-      info = UpdateInfo(
-        version: info.version,
-        versionCode: info.versionCode,
-        changelog: info.changelog,
-        downloadUrl: Uri.parse(manifestUrl).resolveUri(rawDownloadUri).toString(),
-        size: info.size,
-      );
+
+    if (info.version.isEmpty || info.downloadUrl.isEmpty) {
+      throw const FormatException('最新 Release 缺少版本号或 APK 附件');
     }
-    if (info.version.isEmpty ||
-        info.versionCode <= 0 ||
-        info.downloadUrl.isEmpty) {
-      throw const FormatException('update.json 缺少必要字段');
-    }
+
     final downloadUri = Uri.tryParse(info.downloadUrl);
     if (downloadUri == null ||
         !const {'http', 'https'}.contains(downloadUri.scheme.toLowerCase()) ||
         downloadUri.host.isEmpty) {
-      throw const FormatException(
-        'update.json 的 downloadUrl 必须是 http/https 安装包地址',
-      );
+      throw const FormatException('Release 附件的下载地址必须是 http/https');
     }
 
     return UpdateCheckResult(
       currentVersion: currentName,
-      currentVersionCode: currentCode,
       info: info,
     );
   }
