@@ -45,6 +45,8 @@ Future<({PostEditorForm form, PostAttachmentUploadResult attachment})?>
         tid: tid,
         fid: fid,
         repquotePid: repquotePid,
+        // 这里要拿上传凭证传图，缺了就没法继续。
+        requireImageUpload: true,
       );
   final attachment = await api.uploadPostImage(
     form: form,

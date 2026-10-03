@@ -1278,42 +1278,75 @@ class ApiService {
     required String tid,
     required String fid,
     String? repquotePid,
+    bool requireImageUpload = false,
   }) async {
     if (!isLoggedIn) throw StateError('请先登录');
 
     final targetPid = repquotePid?.trim() ?? '';
-    final response = await _dio.get<String>(
-      '/forum.php',
-      queryParameters: {
-        'mod': 'post',
-        'action': 'reply',
-        'fid': fid,
-        'tid': tid,
-        if (targetPid.isNotEmpty) 'repquote': targetPid,
-        'extra': '',
-        'mobile': 2,
-      },
-      options: Options(
-        headers: {'Referer': '$baseUrl/thread-$tid-1-1.html'},
-        responseType: ResponseType.plain,
-        followRedirects: true,
-      ),
-    );
 
-    final body = response.data ?? '';
-    final form = _parser.parsePostEditorForm(
-      body,
-      fallbackFid: fid,
-      fallbackTid: tid,
-      fallbackPid: targetPid,
-    );
-    if (form.formhash.isEmpty ||
-        form.posttime.isEmpty ||
-        !form.canUploadImages) {
-      final readable = _extractAjaxMessage(body);
-      throw StateError(
-        readable.isEmpty ? '未获取到回复图片上传凭证，请重试' : readable,
+    Future<String> request({required bool mobile}) async {
+      final response = await _dio.get<String>(
+        '/forum.php',
+        queryParameters: {
+          'mod': 'post',
+          'action': 'reply',
+          'fid': fid,
+          'tid': tid,
+          if (targetPid.isNotEmpty) 'repquote': targetPid,
+          'extra': '',
+          if (mobile) 'mobile': 2,
+        },
+        options: Options(
+          headers: {
+            'Referer': '$baseUrl/thread-$tid-1-1.html',
+            if (!mobile) 'Cache-Control': 'no-cache',
+          },
+          responseType: ResponseType.plain,
+          followRedirects: true,
+        ),
       );
+      return response.data ?? '';
+    }
+
+    PostEditorForm parse(String body) => _parser.parsePostEditorForm(
+          body,
+          fallbackFid: fid,
+          fallbackTid: tid,
+          fallbackPid: targetPid,
+        );
+
+    // 纯文字回复只需要 formhash 和 posttime；只有要带图时才要求上传凭证。
+    // 多数回复页本来就不输出附件上传的 uploadformdata。
+    bool usable(PostEditorForm form) {
+      if (form.formhash.isEmpty || form.posttime.isEmpty) return false;
+      return !requireImageUpload || form.canUploadImages;
+    }
+
+    var body = await request(mobile: true);
+    var form = parse(body);
+
+    // 移动端模板偶发只返回“数据加载中”壳页，缺关键字段时换非移动端再取一次。
+    if (!usable(form)) {
+      try {
+        final retryBody = await request(mobile: false);
+        final retryForm = parse(retryBody);
+        if (usable(retryForm) ||
+            ((form.formhash.isEmpty || form.posttime.isEmpty) &&
+                retryForm.formhash.isNotEmpty &&
+                retryForm.posttime.isNotEmpty)) {
+          body = retryBody;
+          form = retryForm;
+        }
+      } catch (_) {
+        // 重试失败时保留首次响应，避免掩盖原本的错误原因。
+      }
+    }
+
+    if (form.formhash.isEmpty || form.posttime.isEmpty) {
+      final message = _extractAjaxMessage(body);
+      // “数据加载中”是移动端壳页的占位文案，不是真实原因，不能透给用户。
+      final readable = message == '数据加载中' ? '' : message;
+      throw StateError(readable.isEmpty ? '未获取到回复表单，请重试' : readable);
     }
     _rememberFormhash(form.formhash);
     return form;
