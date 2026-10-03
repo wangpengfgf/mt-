@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -21,7 +22,25 @@ import 'services/sign_service.dart';
 import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
+/// 论坛图片接口有 WAF 防护：请求缺少 User-Agent 时一律返回 403。
+///
+/// Flutter 的 dart:io HttpClient（cached_network_image / NetworkImage 底层
+/// 都用它）默认不发送 User-Agent，于是帖子正文图片、头像、表情全部加载失败。
+/// 这里给所有 dart:io 客户端统一补上浏览器 UA；Dio 已显式设置 UA，会覆盖该默认值。
+class _ForumHttpOverrides extends HttpOverrides {
+  static const String _userAgent =
+      'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)..userAgent = _userAgent;
+  }
+}
+
 Future<void> main() async {
+  // 必须早于任何网络请求创建 HttpClient，否则图片仍会因缺少 UA 被 403 拦截。
+  HttpOverrides.global = _ForumHttpOverrides();
   WidgetsFlutterBinding.ensureInitialized();
   await ErrorLogService.instance.init();
   await Future.wait([
