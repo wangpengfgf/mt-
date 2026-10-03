@@ -53,6 +53,13 @@ android {
     }
 }
 
+dependencies {
+    // Gopeed 官方内核（gomobile 生成，CI 构建阶段产出，见 .github/workflows/build.yml）。
+    implementation(files("libs/libgopeed.aar"))
+    // FileProvider：安装已下载的更新包。
+    implementation("androidx.core:core-ktx:1.13.1")
+}
+
 flutter {
     source = "../.."
 }

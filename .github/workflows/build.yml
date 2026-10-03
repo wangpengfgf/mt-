@@ -75,6 +75,40 @@ jobs:
             echo "keyPassword=$KEY_PASSWORD"
           } > key.properties
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.4"
+          cache: false
+
+      - name: Build Gopeed kernel (libgopeed.aar)
+        run: |
+          NDK_HOME=$(ls -d "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/"* 2>/dev/null | sort -V | tail -n1)
+          if [ -z "$NDK_HOME" ]; then
+            echo "::error::未找到 Android NDK，无法交叉编译 Gopeed 内核"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          echo "使用 NDK：$NDK_HOME"
+
+          git clone --depth 1 https://github.com/GopeedLab/gopeed.git "$RUNNER_TEMP/gopeed"
+          cd "$RUNNER_TEMP/gopeed"
+
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go get golang.org/x/mobile/bind
+          gomobile init
+
+          mkdir -p "$GITHUB_WORKSPACE/android/app/libs"
+          gomobile bind \
+            -tags nosqlite \
+            -ldflags="-w -s -checklinkname=0" \
+            -o "$GITHUB_WORKSPACE/android/app/libs/libgopeed.aar" \
+            -target=android/arm64 \
+            -androidapi 21 \
+            -javapkg=com.gopeed \
+            github.com/GopeedLab/gopeed/bind/mobile
+          ls -lh "$GITHUB_WORKSPACE/android/app/libs/libgopeed.aar"
+
       - name: Build release APK (arm64)
         run: flutter build apk --release --target-platform android-arm64
 

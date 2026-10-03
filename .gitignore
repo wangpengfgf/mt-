@@ -23,6 +23,8 @@ android/.gradle/
 android/local.properties
 android/key.properties
 /key.properties
+# Gopeed 内核由 CI 用 gomobile 构建产出，不入库
+android/app/libs/libgopeed.aar
 **/google-services.json
 scripts/
 test/

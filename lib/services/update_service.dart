@@ -142,12 +142,13 @@ class UpdateCheckResult {
 }
 
 class DownloadProgress {
-  final int status;
+  /// running / done / error，由原生层从 Gopeed 内核任务状态映射而来。
+  final String state;
   final int downloaded;
   final int total;
 
   const DownloadProgress({
-    required this.status,
+    required this.state,
     required this.downloaded,
     required this.total,
   });
@@ -157,8 +158,8 @@ class DownloadProgress {
     return downloaded / total;
   }
 
-  bool get completed => status == 8; // DownloadManager.STATUS_SUCCESSFUL
-  bool get failed => status == 16; // DownloadManager.STATUS_FAILED
+  bool get completed => state == 'done';
+  bool get failed => state == 'error';
 }
 
 class UpdateService {
@@ -249,18 +250,19 @@ class UpdateService {
     );
   }
 
-  Future<int> startDownload(UpdateInfo info) async {
+  /// 交给原生层的 Gopeed 内核做多连接加速下载，返回内核任务 id。
+  Future<String> startDownload(UpdateInfo info) async {
     final uri = Uri.tryParse(info.downloadUrl);
     if (uri == null ||
         !const {'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
         uri.host.isEmpty) {
       throw StateError('软件更新下载地址无效，只支持 http/https');
     }
-    final id = await _channel.invokeMethod<int>('startDownload', {
+    final id = await _channel.invokeMethod<String>('startDownload', {
       'url': info.downloadUrl,
       'fileName': 'MTForum-${info.version}-Release.apk',
     });
-    if (id == null) throw StateError('启动下载失败');
+    if (id == null || id.isEmpty) throw StateError('启动下载失败');
     return id;
   }
 
@@ -275,22 +277,22 @@ class UpdateService {
     if (!opened) throw StateError('无法打开浏览器');
   }
 
-  Future<DownloadProgress> queryDownload(int id) async {
+  Future<DownloadProgress> queryDownload(String id) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'queryDownload',
       {'id': id},
     );
     if (result == null) {
-      return const DownloadProgress(status: 16, downloaded: 0, total: 0);
+      return const DownloadProgress(state: 'error', downloaded: 0, total: 0);
     }
     return DownloadProgress(
-      status: int.tryParse('${result['status'] ?? 0}') ?? 0,
+      state: '${result['state'] ?? 'running'}',
       downloaded: int.tryParse('${result['downloaded'] ?? 0}') ?? 0,
       total: int.tryParse('${result['total'] ?? 0}') ?? 0,
     );
   }
 
-  Future<String> installDownload(int id) async {
+  Future<String> installDownload(String id) async {
     return await _channel.invokeMethod<String>('installDownload', {'id': id}) ??
         'failed';
   }
@@ -619,7 +621,7 @@ Future<void> showUpdateDownloadDialog(
   UpdateInfo info,
 ) async {
   final service = UpdateService.instance;
-  int? downloadId;
+  String? downloadId;
   Timer? timer;
   final progress = ValueNotifier<DownloadProgress?>(null);
   final error = ValueNotifier<String?>(null);

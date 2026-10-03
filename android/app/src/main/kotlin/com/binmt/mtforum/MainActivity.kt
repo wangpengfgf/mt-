@@ -1,7 +1,6 @@
 package com.binmt.mtforum
 
 import android.Manifest
-import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,14 +8,13 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.StandardMethodCodec
 
 class MainActivity : FlutterActivity() {
     private val updateChannelName = "mtforum/update"
@@ -31,9 +29,18 @@ class MainActivity : FlutterActivity() {
     private val minimumValidRefreshRate = 30f
     private val refreshRateTolerance = 0.5f
 
+    private lateinit var gopeedDownloader: GopeedDownloader
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        gopeedDownloader = GopeedDownloader(this)
         applyAdaptiveRefreshRate()
+    }
+
+    override fun onDestroy() {
+        // 内核常驻进程内，仅在整个 Activity 真正退出时释放，避免下载被系统回收。
+        if (isFinishing) gopeedDownloader.shutdown()
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -113,9 +120,15 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // 内核启动/进度查询是耗时 IO 操作，放到后台任务队列，避免阻塞 UI 线程。
+        val updateTaskQueue = flutterEngine.dartExecutor.binaryMessenger
+            .makeBackgroundTaskQueue()
+
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            updateChannelName
+            updateChannelName,
+            StandardMethodCodec.INSTANCE,
+            updateTaskQueue
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getVersionInfo" -> result.success(getVersionInfo())
@@ -126,26 +139,37 @@ class MainActivity : FlutterActivity() {
                         result.error("ARGUMENT", "url/fileName 不能为空", null)
                     } else {
                         try {
-                            result.success(startDownload(url, fileName))
+                            result.success(gopeedDownloader.start(url, fileName))
                         } catch (e: Exception) {
                             result.error("DOWNLOAD", e.message, null)
                         }
                     }
                 }
                 "queryDownload" -> {
-                    val id = call.argument<Number>("id")?.toLong()
-                    if (id == null) {
+                    val id = call.argument<String>("id")
+                    if (id.isNullOrBlank()) {
                         result.error("ARGUMENT", "id 不能为空", null)
                     } else {
-                        result.success(queryDownload(id))
+                        try {
+                            result.success(gopeedDownloader.query(id))
+                        } catch (e: Exception) {
+                            result.error("DOWNLOAD", e.message, null)
+                        }
                     }
                 }
                 "installDownload" -> {
-                    val id = call.argument<Number>("id")?.toLong()
-                    if (id == null) {
+                    val id = call.argument<String>("id")
+                    if (id.isNullOrBlank()) {
                         result.error("ARGUMENT", "id 不能为空", null)
                     } else {
-                        result.success(installDownload(id))
+                        // 安装需要拉起系统 Activity，必须回到主线程。
+                        runOnUiThread {
+                            try {
+                                result.success(gopeedDownloader.install(id))
+                            } catch (e: Exception) {
+                                result.error("DOWNLOAD", e.message, null)
+                            }
+                        }
                     }
                 }
                 else -> result.notImplemented()
@@ -337,88 +361,5 @@ class MainActivity : FlutterActivity() {
             editor.remove("pm_fingerprint_$touid")
         }
         editor.remove(unreadTouidsKey).apply()
-    }
-
-    private fun startDownload(url: String, fileName: String): Long {
-        val parsedUrl = Uri.parse(url)
-        if (parsedUrl.scheme != "http" && parsedUrl.scheme != "https") {
-            throw IllegalArgumentException("软件更新下载地址仅支持 http/https：${parsedUrl.scheme ?: "无协议"}")
-        }
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val request = DownloadManager.Request(parsedUrl)
-            .setTitle("MT论坛更新")
-            .setDescription(fileName)
-            .setMimeType("application/vnd.android.package-archive")
-            .setNotificationVisibility(
-                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-            )
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(true)
-            .setDestinationInExternalFilesDir(
-                this,
-                Environment.DIRECTORY_DOWNLOADS,
-                fileName
-            )
-
-        return manager.enqueue(request)
-    }
-
-    private fun queryDownload(id: Long): Map<String, Any> {
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val query = DownloadManager.Query().setFilterById(id)
-        manager.query(query).use { cursor ->
-            if (!cursor.moveToFirst()) {
-                return mapOf(
-                    "status" to DownloadManager.STATUS_FAILED,
-                    "downloaded" to 0L,
-                    "total" to 0L
-                )
-            }
-
-            val status = cursor.getInt(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
-            )
-            val downloaded = cursor.getLong(
-                cursor.getColumnIndexOrThrow(
-                    DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
-                )
-            )
-            val total = cursor.getLong(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-            )
-
-            return mapOf(
-                "status" to status,
-                "downloaded" to downloaded,
-                "total" to total
-            )
-        }
-    }
-
-    private fun installDownload(id: Long): String {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !packageManager.canRequestPackageInstalls()
-        ) {
-            val settingsIntent = Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                Uri.parse("package:$packageName")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(settingsIntent)
-            return "permission"
-        }
-
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val uri = manager.getUriForDownloadedFile(id) ?: return "failed"
-
-        val installIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-
-        startActivity(installIntent)
-        return "started"
     }
 }
